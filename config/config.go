@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v2"
 )
@@ -14,6 +15,7 @@ const (
 
 var (
 	LogFile       string
+	LogFiles      []string
 	BlockDuration int
 	TorrentTag    string
 	BlockMode     string
@@ -36,6 +38,7 @@ var (
 
 type Config struct {
 	LogFile         string            `yaml:"LogFile"`
+	LogFiles        []string          `yaml:"LogFiles"`
 	BlockDuration   int               `yaml:"BlockDuration"`
 	TorrentTag      string            `yaml:"TorrentTag"`
 	UsernameRegex   string            `yaml:"UsernameRegex"`
@@ -62,7 +65,19 @@ func LoadConfig(configPath string) error {
 		return err
 	}
 
-	LogFile = cfg.LogFile
+	LogFile = strings.TrimSpace(cfg.LogFile)
+	LogFiles = normalizeLogFiles(cfg.LogFiles)
+	if len(LogFiles) == 0 && LogFile != "" {
+		LogFiles = []string{LogFile}
+	}
+	if len(LogFiles) == 0 {
+		return fmt.Errorf("at least one of LogFile or LogFiles must be configured")
+	}
+	if LogFile == "" {
+		// Keep the legacy global populated for callers that still inspect it.
+		LogFile = LogFiles[0]
+	}
+
 	BlockDuration = cfg.BlockDuration
 	TorrentTag = cfg.TorrentTag
 	IgnoreEmail = cfg.IgnoreEmail
@@ -115,4 +130,27 @@ func LoadConfig(configPath string) error {
 	}
 
 	return err
+}
+
+
+func normalizeLogFiles(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		seen[path] = struct{}{}
+		result = append(result, path)
+	}
+
+	return result
 }
