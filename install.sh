@@ -135,7 +135,7 @@ if [ "$INSTALL_FROM_PACKAGE" = false ]; then
     
     print_info "Downloading the latest version of tblocker..."
     LATEST_RELEASE=$(curl -s https://api.github.com/repos/SkyPip228/tblockernew/releases/latest | grep tag_name | cut -d '"' -f 4)
-    URL="https://github.com/SkyPip228/tblockernew/releases/download/${LATEST_RELEASE}/xray-torrent-blocker-${LATEST_RELEASE}-linux-${ARCH}.tar.gz"
+    URL="https://github.com/SkyPip228/tblockernew/releases/download/${LATEST_RELEASE}/tblockernew-${LATEST_RELEASE}-linux-${ARCH}.tar.gz"
     
     curl -sL "$URL" -o tblocker.tar.gz
     
