@@ -158,7 +158,6 @@ BlockDuration: "invalid"
 	}
 }
 
-
 func TestLoadConfigMultipleLogFiles(t *testing.T) {
 	configContent := `
 LogFiles:
