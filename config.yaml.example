@@ -1,0 +1,72 @@
+# Обязательный. Путь к файлу логов, который будет мониториться.
+# Required. Path to the log file to be monitored.
+LogFile: "/var/log/remnanode/access.log"
+
+# Обязательный. Продолжительность блокировки IP-адреса в минутах.
+# Required. Duration of IP address blocking in minutes.
+BlockDuration: 10
+
+# Обязательный. Тег, по которому приложение будет определять, что нужно обрабатывать строку лога.
+# Required. Tag that the application uses to determine which log entry to process.
+TorrentTag: "TORRENT"
+
+# Опциональный. Указывает, какой инструмент использовать для блокировки IP-адресов.
+# Допустимые значения: "iptables" или "nft". По умолчанию используется "iptables".
+# Приложение автоматически выберет доступный файрвол, если указанный недоступен.
+# Optional. Specifies which tool to use for IP address blocking.
+# Available options: "iptables" or "nft". Defaults to "iptables".
+# The application will automatically select an available firewall if the specified one is not available.
+BlockMode: "iptables"
+
+# Опциональный. Указывает IP-адреса, которые не будут заблокированы.
+# Optional. Specifies the IP addresses that will not be blocked.
+BypassIPS:
+  - "127.0.0.1"
+  - "::1"
+
+# Опциональный. Регулярное выражение для обработки имени пользователя для вебхуков.
+# Это regex применяется к имени пользователя, извлеченному из поля "email: ".
+# Regex должен иметь ОДНУ группу захвата () для извлечения нужной части.
+# Примеры:
+#   - Отбросить ID юзера в Mazrban: "^(\\d+)\\.(.+)$" -> "12345.username" становится "username"
+#   - Убрать префикс: "^prefix_(.+)" -> "prefix_username" становится "username"  
+#   - Извлечь Telegram ID: "_tgid-(\\d+)" -> "user_tgid-12345" становится "12345"
+#   - Оставить полное: "^(.+)$" (по умолчанию) -> оставляет полное имя без изменений
+# Optional. Regular expression to process username extracted from log entry.
+# This regex is applied to the username extracted from "email: " field.
+# The regex should have ONE capturing group () to extract the desired part.
+# Examples:
+#   - Remove user ID in Mazrban: "^(\\d+)\\.(.+)$" -> "12345.username" becomes "username"
+#   - Remove prefix: "^prefix_(.+)" -> "prefix_username" becomes "username"  
+#   - Extract Telegram ID: "_tgid-(\\d+)" -> "user_tgid-12345" becomes "12345"
+#   - Keep full: "^(.+)$" (default) -> keeps full username unchanged (by default)
+UsernameRegex: "^(.+)$"
+
+# Опционально. Отправлять ли уведомления через вебхук
+# Optional. Whether to send webhook notifications
+SendWebhook: false
+
+# Опционально. URL для отправки вебхуков
+# Optional. URL for sending webhooks
+WebhookURL: "https://your-webhook-url.com/endpoint"
+
+# Опционально. Шаблон JSON для вебхука
+# Optional. JSON template for webhook
+# Available variables: %s - username, %s - ip, %s - server, %s - action (block/unblock), %d - block duration (minutes), %s - timestamp
+WebhookTemplate: '{"username":"%s","ip":"%s","server":"%s","action":"%s","duration":%d,"timestamp":"%s"}'
+
+# Опционально. Путь к директории для хранения файла с заблокированными IP-адресами.
+# Optional. Path to the directory for storing the blocked IP addresses file.
+StorageDir: "/opt/tblocker"
+
+# Опционально. Имя хоста сервера. Если не указано, будет использоваться системное имя.
+# Optional. Server hostname. If not set, system hostname will be used.
+# Hostname: "my-server-name"
+
+# Опционально. Заголовки, которые будут добавлены к webhook-запросу.
+# Можно использовать для авторизации или кастомной информации.
+# Optional. Headers to include in the webhook request.
+# Can be used for authorization or custom metadata.
+WebhookHeaders:
+  Authorization: "Bearer your-secret-token"
+  X-Custom-Header: "some-value"

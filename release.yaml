@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Go Environment
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
+
+      - name: Download openrepo CLI
+        run: |
+          wget -O openrepo https://github.com/openkilt/openrepo/releases/download/v1.0.0/openrepo_cli_x86_64
+          chmod +x openrepo
+          sudo mv openrepo /usr/local/bin/
+
+      - name: Upload DEB packages
+        env:
+          OPENREPO_API_KEY: ${{ secrets.OPENREPO_API_KEY }}
+        run: |
+          for f in dist/*.deb; do
+            openrepo --key "$OPENREPO_API_KEY" --server https://repo.remna.dev upload -r xray-tools "$f"
+          done
+
+      - name: Upload RPM packages
+        env:
+          OPENREPO_API_KEY: ${{ secrets.OPENREPO_API_KEY }}
+        run: |
+          for f in dist/*.rpm; do
+            openrepo --key "$OPENREPO_API_KEY" --server https://repo.remna.dev upload -r xray-tools-rpm "$f"
+          done
