@@ -152,6 +152,16 @@ add_log_candidate() {
   LOG_FILES+=("$candidate")
 }
 
+ensure_log_candidate() {
+  local candidate="$1"
+  [[ -n "$candidate" ]] || return 0
+
+  mkdir -p "$(dirname "$candidate")"
+  touch "$candidate"
+  chmod 0644 "$candidate" || true
+  add_log_candidate "$candidate"
+}
+
 discover_logs() {
   LOG_FILES=()
 
@@ -159,8 +169,8 @@ discover_logs() {
     local p
     for p in "${FORCED_LOGS[@]}"; do
       p="$(echo "$p" | xargs)"
-      [[ -f "$p" ]] || die "Specified log file does not exist: $p"
-      add_log_candidate "$p"
+      [[ -n "$p" ]] || continue
+      ensure_log_candidate "$p"
     done
     return
   fi
@@ -194,11 +204,11 @@ discover_logs() {
 
       case "$destination" in
         */remnanode|*/remnanode/|/var/log/remnanode|/var/lib/marzban-node)
-          add_log_candidate "$source/access.log"
+          ensure_log_candidate "$source/access.log"
           ;;
       esac
     done < <(
-      docker ps -q 2>/dev/null | while read -r cid; do
+      docker ps -aq 2>/dev/null | while read -r cid; do
         docker inspect -f '{{range .Mounts}}{{println .Source "|" .Destination}}{{end}}' "$cid" 2>/dev/null || true
       done
     )
@@ -210,16 +220,20 @@ discover_logs() {
     local p
     for p in "${manual_logs[@]}"; do
       p="$(echo "$p" | xargs)"
-      [[ -f "$p" ]] || die "Log file does not exist: $p"
-      add_log_candidate "$p"
+      [[ -n "$p" ]] || continue
+      ensure_log_candidate "$p"
     done
   fi
 
   if [[ ${#LOG_FILES[@]} -eq 0 ]]; then
-    die "No Xray/Remnawave access.log found. Enable Xray access logging and mount it to the host, then run installer again. You can also specify --logs /path/a.log,/path/b.log"
+    local pending_log="/var/log/tblocker/pending-access.log"
+    warn "No Xray/Remnawave nodes or access logs found. Server can still be prepared now."
+    ensure_log_candidate "$pending_log"
+    warn "Using placeholder log: $pending_log"
+    warn "After adding a node, rerun the same installer once; it will detect the real node log(s), preserve backups, and update LogFiles automatically."
   fi
 
-  ok "Detected ${#LOG_FILES[@]} log file(s):"
+  ok "Configured ${#LOG_FILES[@]} log file(s):"
   local f
   for f in "${LOG_FILES[@]}"; do
     echo "  - $f"
