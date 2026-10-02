@@ -132,7 +132,6 @@ func LoadConfig(configPath string) error {
 	return err
 }
 
-
 func normalizeLogFiles(paths []string) []string {
 	if len(paths) == 0 {
 		return nil
