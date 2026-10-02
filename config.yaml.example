@@ -1,6 +1,14 @@
-# Обязательный. Путь к файлу логов, который будет мониториться.
-# Required. Path to the log file to be monitored.
-LogFile: "/var/log/remnanode/access.log"
+# Обязательный. Один или несколько Xray access.log для мониторинга.
+# Required. One or more Xray access logs to monitor.
+# Для нескольких Remnawave/Xray нод на одном VPS укажите каждый лог отдельно.
+# For multiple Remnawave/Xray nodes on one VPS, list every log separately.
+LogFiles:
+  - "/var/log/remnanode-1/access.log"
+  - "/var/log/remnanode-2/access.log"
+
+# Обратная совместимость: старый одиночный параметр также поддерживается.
+# Backward compatibility: the legacy single-file option is still supported.
+# LogFile: "/var/log/remnanode/access.log"
 
 # Обязательный. Продолжительность блокировки IP-адреса в минутах.
 # Required. Duration of IP address blocking in minutes.

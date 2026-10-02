@@ -18,6 +18,7 @@ import (
 
 var ipStorage *storage.IPStorage
 var firewallManager *firewall.Manager
+var blockMu sync.Mutex
 
 var (
 	parseStats struct {
@@ -50,25 +51,54 @@ func initializeByteSearchPatterns() {
 }
 
 func StartLogMonitor() {
-	t, err := tail.TailFile(config.LogFile, tail.Config{
+	if len(config.LogFiles) == 0 {
+		log.Fatal("No log files configured")
+	}
+
+	log.Printf("Monitoring %d Xray log file(s)", len(config.LogFiles))
+
+	var wg sync.WaitGroup
+	for _, logFile := range config.LogFiles {
+		logFile := logFile
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			monitorLogFile(logFile)
+		}()
+	}
+
+	wg.Wait()
+}
+
+func monitorLogFile(logFile string) {
+	log.Printf("Starting log monitor: %s", logFile)
+
+	t, err := tail.TailFile(logFile, tail.Config{
 		Follow:    true,
 		ReOpen:    true,
 		Location:  &tail.SeekInfo{Offset: 0, Whence: 2},
 		MustExist: false,
 	})
 	if err != nil {
-		log.Fatalf("Error opening log file: %v", err)
+		log.Printf("Error opening log file %s: %v", logFile, err)
+		return
 	}
 
 	for line := range t.Lines {
-		lineBytes := stringToBytes(line.Text)
+		if line == nil {
+			continue
+		}
+		if line.Err != nil {
+			log.Printf("Error reading log file %s: %v", logFile, line.Err)
+			continue
+		}
 
+		lineBytes := stringToBytes(line.Text)
 		hasTorrentTag := containsBytes(lineBytes, torrentTagBytes)
 
 		if config.EnablePerformanceMetrics {
 			parseStart := time.Now()
 			parseDuration := time.Since(parseStart)
-
 			updateParseStats(parseDuration, hasTorrentTag)
 		}
 
@@ -159,14 +189,22 @@ func handleLogEntry(line string) {
 		return
 	}
 
+	// Multiple log monitors can observe the same client at nearly the same time.
+	// Serialize the check+add sequence so one IP creates only one active block,
+	// one conntrack drop, and one webhook notification.
+	blockMu.Lock()
 	if ipStorage.IsBlocked(ip) {
+		blockMu.Unlock()
 		log.Printf("User %s with IP: %s is already blocked. Skipping...\n", usernameStr, ip)
 		return
 	}
 
 	if err := ipStorage.AddBlockedIP(ip, usernameStr, time.Duration(config.BlockDuration)*time.Minute); err != nil {
+		blockMu.Unlock()
 		log.Printf("Error saving blocked IP to storage: %v", err)
+		return
 	}
+	blockMu.Unlock()
 
 	go BlockIP(ip)
 	log.Printf("User %s with IP: %s blocked for %d minutes\n", usernameStr, ip, config.BlockDuration)
