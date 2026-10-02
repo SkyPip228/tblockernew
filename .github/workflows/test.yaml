@@ -35,5 +35,8 @@ jobs:
       - name: Compile all test packages
         run: go test ./... -run=NO_TESTS_SHOULD_MATCH
 
+      - name: Check installer syntax
+        run: bash -n install.sh
+
       - name: Build
         run: go build ./...
