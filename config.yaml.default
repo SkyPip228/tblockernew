@@ -1,8 +1,14 @@
-LogFile: "/var/log/remnanode/access.log"
+# One or more Xray access logs to monitor.
+# Use LogFiles for multiple Remnawave/Xray nodes on the same server.
+LogFiles:
+  - "/var/log/remnanode/access.log"
+
+# Backward compatibility: existing installations may keep using a single LogFile.
+# LogFile: "/var/log/remnanode/access.log"
+
 BlockDuration: 10
 TorrentTag: "TORRENT"
 BlockMode: "iptables"
 #
-# For additional parameters (webhooks, whitelist, etc.) - check docs: https://github.com/kutovoys/xray-torrent-blocker
-# Для дополнительных параметров (вебхуки, белый список и т.д.) - смотрите документацию: https://github.com/kutovoys/xray-torrent-blocker
-
+# For additional parameters (webhooks, whitelist, etc.) - check docs: https://github.com/SkyPip228/tblockernew
+# Для дополнительных параметров (вебхуки, белый список и т.д.) - смотрите документацию: https://github.com/SkyPip228/tblockernew
