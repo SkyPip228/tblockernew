@@ -43,6 +43,9 @@ WebhookHeaders:
 	if LogFile != "/var/log/test.log" {
 		t.Errorf("Expected LogFile '/var/log/test.log', got '%s'", LogFile)
 	}
+	if len(LogFiles) != 1 || LogFiles[0] != "/var/log/test.log" {
+		t.Errorf("Expected legacy LogFile to populate LogFiles, got %#v", LogFiles)
+	}
 
 	if BlockDuration != 15 {
 		t.Errorf("Expected BlockDuration 15, got %d", BlockDuration)
@@ -152,5 +155,64 @@ BlockDuration: "invalid"
 	err = LoadConfig(tmpFile.Name())
 	if err == nil {
 		t.Error("Expected error when loading invalid YAML")
+	}
+}
+
+
+func TestLoadConfigMultipleLogFiles(t *testing.T) {
+	configContent := `
+LogFiles:
+  - "/var/log/remnanode-a/access.log"
+  - "/var/log/remnanode-b/access.log"
+  - "/var/log/remnanode-a/access.log"
+  - "  "
+BlockDuration: 10
+TorrentTag: "TORRENT"
+`
+
+	tmpFile, err := os.CreateTemp("", "config_test_*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(configContent); err != nil {
+		t.Fatalf("Failed to write config content: %v", err)
+	}
+	tmpFile.Close()
+
+	if err := LoadConfig(tmpFile.Name()); err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	if len(LogFiles) != 2 {
+		t.Fatalf("Expected 2 unique log files, got %#v", LogFiles)
+	}
+	if LogFiles[0] != "/var/log/remnanode-a/access.log" || LogFiles[1] != "/var/log/remnanode-b/access.log" {
+		t.Errorf("Unexpected LogFiles: %#v", LogFiles)
+	}
+	if LogFile != LogFiles[0] {
+		t.Errorf("Expected legacy LogFile to mirror first LogFiles entry, got %q", LogFile)
+	}
+}
+
+func TestLoadConfigRequiresLogFile(t *testing.T) {
+	configContent := `
+BlockDuration: 10
+TorrentTag: "TORRENT"
+`
+
+	tmpFile, err := os.CreateTemp("", "config_test_*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.WriteString(configContent); err != nil {
+		t.Fatalf("Failed to write config content: %v", err)
+	}
+	tmpFile.Close()
+
+	if err := LoadConfig(tmpFile.Name()); err == nil {
+		t.Fatal("Expected error when neither LogFile nor LogFiles is configured")
 	}
 }
