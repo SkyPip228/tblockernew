@@ -33,7 +33,7 @@ jobs:
         run: go test ./config ./storage ./utils -count=1
 
       - name: Compile all test packages
-        run: go test ./... -run '^
+        run: go test ./... -run=NO_TESTS_SHOULD_MATCH
 
       - name: Build
         run: go build ./...
