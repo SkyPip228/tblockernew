@@ -134,8 +134,8 @@ if [ "$INSTALL_FROM_PACKAGE" = false ]; then
     esac
     
     print_info "Downloading the latest version of tblocker..."
-    LATEST_RELEASE=$(curl -s https://api.github.com/repos/kutovoys/xray-torrent-blocker/releases/latest | grep tag_name | cut -d '"' -f 4)
-    URL="https://github.com/kutovoys/xray-torrent-blocker/releases/download/${LATEST_RELEASE}/xray-torrent-blocker-${LATEST_RELEASE}-linux-${ARCH}.tar.gz"
+    LATEST_RELEASE=$(curl -s https://api.github.com/repos/SkyPip228/tblockernew/releases/latest | grep tag_name | cut -d '"' -f 4)
+    URL="https://github.com/SkyPip228/tblockernew/releases/download/${LATEST_RELEASE}/xray-torrent-blocker-${LATEST_RELEASE}-linux-${ARCH}.tar.gz"
     
     curl -sL "$URL" -o tblocker.tar.gz
     
@@ -163,21 +163,34 @@ if [ "$INSTALL_FROM_PACKAGE" = false ]; then
     fi
     
     print_info "Setting up systemd service..."
-    curl -sL https://raw.githubusercontent.com/kutovoys/xray-torrent-blocker/main/tblocker.service -o /etc/systemd/system/tblocker.service
+    curl -sL https://raw.githubusercontent.com/SkyPip228/tblockernew/main/tblocker.service -o /etc/systemd/system/tblocker.service
 fi
 
 print_info "Configuration setup..."
 echo ""
-read -p "Enter the path to the log file to monitor: " log_file_path
+read -p "Enter log file path(s), comma-separated: " log_file_paths_raw
+IFS=',' read -ra log_file_paths <<< "$log_file_paths_raw"
 
-if [ ! -f "$log_file_path" ]; then
-    print_warning "Log file does not exist: $log_file_path"
-    read -p "Do you want to create it? (y/N): " create_log_file
-    if [[ $create_log_file =~ ^[Yy]$ ]]; then
-        mkdir -p "$(dirname "$log_file_path")"
-        touch "$log_file_path"
-        print_info "Created log file: $log_file_path"
+clean_log_files=()
+for raw_path in "${log_file_paths[@]}"; do
+    log_file_path="$(echo "$raw_path" | xargs)"
+    [ -z "$log_file_path" ] && continue
+
+    if [ ! -f "$log_file_path" ]; then
+        print_warning "Log file does not exist: $log_file_path"
+        read -p "Do you want to create it? (y/N): " create_log_file
+        if [[ $create_log_file =~ ^[Yy]$ ]]; then
+            mkdir -p "$(dirname "$log_file_path")"
+            touch "$log_file_path"
+            print_info "Created log file: $log_file_path"
+        fi
     fi
+    clean_log_files+=("$log_file_path")
+done
+
+if [ "${#clean_log_files[@]}" -eq 0 ]; then
+    print_error "At least one log file path is required."
+    exit 1
 fi
 
 echo ""
@@ -240,11 +253,38 @@ case $FIREWALL in
 esac
 
 print_info "Updating configuration..."
-sed -i "s|LogFile: \".*\"|LogFile: \"$log_file_path\"|" "$CONFIG_PATH"
+python3 - "$CONFIG_PATH" "${clean_log_files[@]}" <<'PY'
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+log_files = sys.argv[2:]
+text = config_path.read_text()
+
+lines = text.splitlines()
+out = []
+skip_logfiles = False
+for line in lines:
+    if line.startswith("LogFiles:"):
+        skip_logfiles = True
+        continue
+    if skip_logfiles:
+        if line.startswith("  - "):
+            continue
+        skip_logfiles = False
+    if line.startswith("LogFile:"):
+        continue
+    out.append(line)
+
+block = ["LogFiles:"] + [f'  - "{path}"' for path in log_files]
+config_path.write_text("\n".join(block + [""] + out) + "\n")
+PY
 sed -i "s|BlockMode: \".*\"|BlockMode: \"$FIREWALL\"|" "$CONFIG_PATH"
 
 print_success "Configuration updated:"
-print_info "  Log file: $log_file_path"
+for log_file_path in "${clean_log_files[@]}"; do
+    print_info "  Log file: $log_file_path"
+done
 print_info "  Firewall: $FIREWALL"
 
 print_info "Starting tblocker service..."
@@ -272,5 +312,5 @@ echo ""
 print_warning "IMPORTANT: Make sure your firewall ($FIREWALL) is properly configured!"
 echo ""
 print_info "For additional parameters (webhooks, whitelist, etc.) - see documentation:"
-print_info "https://github.com/kutovoys/xray-torrent-blocker"
+print_info "https://github.com/SkyPip228/tblockernew"
 echo "==============================================================="
