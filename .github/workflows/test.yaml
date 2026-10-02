@@ -29,8 +29,11 @@ jobs:
           echo "$files"
           test -z "$files"
 
-      - name: Run unit tests
-        run: go test ./... -count=1
+      - name: Run non-privileged unit tests
+        run: go test ./config ./storage ./utils -count=1
+
+      - name: Compile all test packages
+        run: go test ./... -run '^
 
       - name: Build
         run: go build ./...
