@@ -1,6 +1,14 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-set -e
+REPO="SkyPip228/tblockernew"
+REF="${TBLOCKER_REF:-main}"
+INSTALL_DIR="/opt/tblocker"
+CONFIG_PATH="$INSTALL_DIR/config.yaml"
+SERVICE_PATH="/etc/systemd/system/tblocker.service"
+AUTO_MODE=true
+FORCED_FIREWALL=""
+declare -a FORCED_LOGS=()
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -8,309 +16,459 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
+ok()      { echo -e "${GREEN}[OK]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
+die()     { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+
+trap 'echo -e "\033[0;31m[ERROR]\033[0m Installation failed at line $LINENO" >&2' ERR
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bash install.sh
+  bash install.sh --interactive
+  bash install.sh --logs /path/a.log,/path/b.log
+  bash install.sh --firewall nft
+  bash install.sh --firewall iptables
+
+Environment:
+  TBLOCKER_REF=main   Git branch/tag used for source fallback.
+EOF
 }
 
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-if [ "$EUID" -ne 0 ]; then
-  print_error "Please run the script with root privileges (sudo)."
-  exit 1
-fi
-
-ARCH=""
-if [ "$(uname -m)" == "x86_64" ]; then
-  ARCH="amd64"
-elif [ "$(uname -m)" == "aarch64" ]; then
-  ARCH="arm64"
-else
-  print_error "Unsupported architecture: $(uname -m)"
-  exit 1
-fi
-
-DISTRO=""
-PKG_MANAGER=""
-INSTALL_FROM_PACKAGE=false
-
-if command -v apt-get &> /dev/null; then
-    DISTRO="debian"
-    PKG_MANAGER="apt-get"
-    INSTALL_FROM_PACKAGE=true
-elif command -v yum &> /dev/null; then
-    DISTRO="rhel"
-    PKG_MANAGER="yum"
-    INSTALL_FROM_PACKAGE=true
-elif command -v dnf &> /dev/null; then
-    DISTRO="fedora"
-    PKG_MANAGER="dnf"
-    INSTALL_FROM_PACKAGE=true
-elif command -v pacman &> /dev/null; then
-    DISTRO="arch"
-    PKG_MANAGER="pacman"
-    INSTALL_FROM_PACKAGE=false
-else
-    print_warning "Unable to determine package manager. Will install from releases."
-    INSTALL_FROM_PACKAGE=false
-fi
-
-print_info "Detected distribution: $DISTRO ($PKG_MANAGER)"
-
-if systemctl is-active --quiet tblocker; then
-  print_info "Stopping existing tblocker service..."
-  systemctl stop tblocker
-fi
-
-if [ "$INSTALL_FROM_PACKAGE" = true ]; then
-    print_info "Installing from package repository..."
-    
-    case $PKG_MANAGER in
-        "apt-get")
-            print_info "Adding xray-tools repository..."
-            apt-get update -qq > /dev/null
-            apt-get install -y curl gnupg > /dev/null
-            curl -s https://repo.remna.dev/xray-tools/public.gpg | gpg --yes --dearmor -o /usr/share/keyrings/openrepo-xray-tools.gpg > /dev/null
-            echo "deb [arch=any signed-by=/usr/share/keyrings/openrepo-xray-tools.gpg] https://repo.remna.dev/xray-tools/ stable main" > /etc/apt/sources.list.d/openrepo-xray-tools.list
-            apt-get update -qq > /dev/null
-            apt-get install -y tblocker > /dev/null
-            ;;
-        "yum")
-            print_info "Adding xray-tools repository..."
-            echo """
-[xray-tools-rpm]
-name=xray-tools-rpm
-baseurl=https://repo.remna.dev/xray-tools-rpm
-enabled=1
-repo_gpgcheck=1
-gpgkey=https://repo.remna.dev/xray-tools-rpm/public.gpg
-""" > /etc/yum.repos.d/xray-tools-rpm.repo
-            yum install -y tblocker
-            ;;
-    esac
-    
-    if [ $? -eq 0 ]; then
-        print_success "Successfully installed from package repository"
-        INSTALL_DIR="/opt/tblocker"
-        CONFIG_PATH="/opt/tblocker/config.yaml"
-    else
-        print_warning "Failed to install from package repository, falling back to releases"
-        INSTALL_FROM_PACKAGE=false
-    fi
-fi
-
-if [ "$INSTALL_FROM_PACKAGE" = false ]; then
-    print_info "Installing from GitHub releases..."
-    
-    print_info "Installing minimal dependencies (only curl for downloading)..."
-    case $PKG_MANAGER in
-        "apt-get")
-            apt-get update -qq
-            apt-get install -y curl > /dev/null
-            ;;
-        "yum"|"dnf")
-            if [ "$PKG_MANAGER" = "yum" ]; then
-                yum install -y epel-release > /dev/null
-                yum install -y curl > /dev/null
-            else
-                dnf install -y curl > /dev/null
-            fi
-            ;;
-        "pacman")
-            pacman -Sy --noconfirm curl > /dev/null
-            ;;
-        *)
-            print_warning "Please install curl manually if not already installed."
-            ;;
-    esac
-    
-    print_info "Downloading the latest version of tblocker..."
-    LATEST_RELEASE=$(curl -s https://api.github.com/repos/SkyPip228/tblockernew/releases/latest | grep tag_name | cut -d '"' -f 4)
-    URL="https://github.com/SkyPip228/tblockernew/releases/download/${LATEST_RELEASE}/tblockernew-${LATEST_RELEASE}-linux-${ARCH}.tar.gz"
-    
-    curl -sL "$URL" -o tblocker.tar.gz
-    
-    if [ ! -f "tblocker.tar.gz" ]; then
-        print_error "Failed to download tblocker"
-        exit 1
-    fi
-    
-    print_info "Extracting files..."
-    mkdir -p /opt/tblocker
-    tar -xzf tblocker.tar.gz -C /opt/tblocker --overwrite
-    rm tblocker.tar.gz
-    
-    INSTALL_DIR="/opt/tblocker"
-    CONFIG_PATH="/opt/tblocker/config.yaml"
-    CONFIG_TEMPLATE_PATH="/opt/tblocker/config.yaml.default"
-    
-    print_info "Kernel module nf_conntrack will be loaded automatically by tblocker on first run"
-
-    if [ ! -f "$CONFIG_PATH" ]; then
-        cp "$CONFIG_TEMPLATE_PATH" "$CONFIG_PATH"
-        print_info "New configuration file created at $CONFIG_PATH"
-    else
-        print_info "Configuration file already exists at $CONFIG_PATH"
-    fi
-    
-    print_info "Setting up systemd service..."
-    curl -sL https://raw.githubusercontent.com/SkyPip228/tblockernew/main/tblocker.service -o /etc/systemd/system/tblocker.service
-fi
-
-print_info "Configuration setup..."
-echo ""
-read -p "Enter log file path(s), comma-separated: " log_file_paths_raw
-IFS=',' read -ra log_file_paths <<< "$log_file_paths_raw"
-
-clean_log_files=()
-for raw_path in "${log_file_paths[@]}"; do
-    log_file_path="$(echo "$raw_path" | xargs)"
-    [ -z "$log_file_path" ] && continue
-
-    if [ ! -f "$log_file_path" ]; then
-        print_warning "Log file does not exist: $log_file_path"
-        read -p "Do you want to create it? (y/N): " create_log_file
-        if [[ $create_log_file =~ ^[Yy]$ ]]; then
-            mkdir -p "$(dirname "$log_file_path")"
-            touch "$log_file_path"
-            print_info "Created log file: $log_file_path"
-        fi
-    fi
-    clean_log_files+=("$log_file_path")
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --interactive)
+      AUTO_MODE=false
+      shift
+      ;;
+    --logs)
+      [[ $# -ge 2 ]] || die "--logs requires a comma-separated value"
+      IFS=',' read -r -a FORCED_LOGS <<< "$2"
+      shift 2
+      ;;
+    --firewall)
+      [[ $# -ge 2 ]] || die "--firewall requires nft or iptables"
+      FORCED_FIREWALL="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
 done
 
-if [ "${#clean_log_files[@]}" -eq 0 ]; then
-    print_error "At least one log file path is required."
-    exit 1
-fi
+[[ $EUID -eq 0 ]] || die "Run as root."
 
-echo ""
-print_info "Available firewalls:"
-echo "1) iptables (Linux netfilter)"
-echo "2) nft (nftables)"
-echo ""
-
-while true; do
-    read -p "Select firewall (1-2): " firewall_choice
-    case $firewall_choice in
-        1) FIREWALL="iptables"; break ;;
-        2) FIREWALL="nft"; break ;;
-        *) print_error "Invalid choice. Please select 1 or 2." ;;
-    esac
-done
-
-print_info "Checking firewall availability..."
-case $FIREWALL in
-    "iptables")
-        if ! command -v iptables &> /dev/null; then
-            print_info "Installing iptables..."
-            case $PKG_MANAGER in
-                "apt-get")
-                    apt-get install -y iptables
-                    ;;
-                "yum"|"dnf")
-                    if [ "$PKG_MANAGER" = "yum" ]; then
-                        yum install -y iptables-services
-                    else
-                        dnf install -y iptables-services
-                    fi
-                    ;;
-                "pacman")
-                    pacman -S --noconfirm iptables
-                    ;;
-            esac
-        fi
-        ;;
-    "nft")
-        if ! command -v nft &> /dev/null; then
-            print_info "Installing nftables..."
-            case $PKG_MANAGER in
-                "apt-get")
-                    apt-get install -y nftables
-                    ;;
-                "yum"|"dnf")
-                    if [ "$PKG_MANAGER" = "yum" ]; then
-                        yum install -y nftables
-                    else
-                        dnf install -y nftables
-                    fi
-                    ;;
-                "pacman")
-                    pacman -S --noconfirm nftables
-                    ;;
-            esac
-        fi
-        ;;
+case "$(uname -m)" in
+  x86_64) ARCH="amd64"; GO_ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64"; GO_ARCH="arm64" ;;
+  *) die "Unsupported architecture: $(uname -m)" ;;
 esac
 
-print_info "Updating configuration..."
-python3 - "$CONFIG_PATH" "${clean_log_files[@]}" <<'PY'
+if command -v apt-get >/dev/null 2>&1; then
+  PKG="apt"
+elif command -v dnf >/dev/null 2>&1; then
+  PKG="dnf"
+elif command -v yum >/dev/null 2>&1; then
+  PKG="yum"
+else
+  die "Supported package manager not found (apt/dnf/yum)."
+fi
+
+install_packages() {
+  info "Installing required system packages..."
+  case "$PKG" in
+    apt)
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq curl ca-certificates tar python3 conntrack >/dev/null
+      ;;
+    dnf)
+      dnf install -y curl ca-certificates tar python3 conntrack-tools >/dev/null
+      ;;
+    yum)
+      yum install -y curl ca-certificates tar python3 conntrack-tools >/dev/null
+      ;;
+  esac
+  ok "System dependencies installed"
+}
+
+choose_firewall() {
+  if [[ -n "$FORCED_FIREWALL" ]]; then
+    case "$FORCED_FIREWALL" in
+      nft|iptables) FIREWALL="$FORCED_FIREWALL" ;;
+      *) die "--firewall must be nft or iptables" ;;
+    esac
+  elif command -v nft >/dev/null 2>&1; then
+    FIREWALL="nft"
+  elif command -v iptables >/dev/null 2>&1; then
+    FIREWALL="iptables"
+  else
+    if [[ "$PKG" == "apt" ]]; then
+      apt-get install -y -qq nftables >/dev/null
+    elif [[ "$PKG" == "dnf" ]]; then
+      dnf install -y nftables >/dev/null
+    else
+      yum install -y nftables >/dev/null
+    fi
+    FIREWALL="nft"
+  fi
+
+  if [[ "$FIREWALL" == "nft" ]] && ! command -v nft >/dev/null 2>&1; then
+    case "$PKG" in
+      apt) apt-get install -y -qq nftables >/dev/null ;;
+      dnf) dnf install -y nftables >/dev/null ;;
+      yum) yum install -y nftables >/dev/null ;;
+    esac
+  fi
+
+  if [[ "$FIREWALL" == "iptables" ]] && ! command -v iptables >/dev/null 2>&1; then
+    case "$PKG" in
+      apt) apt-get install -y -qq iptables >/dev/null ;;
+      dnf) dnf install -y iptables >/dev/null ;;
+      yum) yum install -y iptables-services >/dev/null ;;
+    esac
+  fi
+
+  ok "Firewall selected: $FIREWALL"
+}
+
+add_log_candidate() {
+  local candidate="$1"
+  [[ -n "$candidate" ]] || return 0
+  candidate="$(readlink -f "$candidate" 2>/dev/null || printf '%s' "$candidate")"
+  [[ -f "$candidate" ]] || return 0
+
+  local existing
+  for existing in "${LOG_FILES[@]:-}"; do
+    [[ "$existing" == "$candidate" ]] && return 0
+  done
+  LOG_FILES+=("$candidate")
+}
+
+discover_logs() {
+  LOG_FILES=()
+
+  if [[ ${#FORCED_LOGS[@]} -gt 0 ]]; then
+    local p
+    for p in "${FORCED_LOGS[@]}"; do
+      p="$(echo "$p" | xargs)"
+      [[ -f "$p" ]] || die "Specified log file does not exist: $p"
+      add_log_candidate "$p"
+    done
+    return
+  fi
+
+  local known
+  for known in \
+    /var/log/remnanode/access.log \
+    /var/log/remnanode-*/access.log \
+    /var/log/remnanode*/access.log \
+    /var/lib/marzban-node/access.log \
+    /var/lib/marzban-node-*/access.log; do
+    for f in $known; do
+      [[ -e "$f" ]] && add_log_candidate "$f"
+    done
+  done
+
+  while IFS= read -r f; do
+    add_log_candidate "$f"
+  done < <(
+    find /var/log /var/lib /opt \
+      -maxdepth 5 -type f -name 'access.log' \
+      \( -path '*remnanode*' -o -path '*marzban*' -o -path '*xray*' \) \
+      2>/dev/null || true
+  )
+
+  if command -v docker >/dev/null 2>&1; then
+    while IFS='|' read -r source destination; do
+      source="$(echo "${source:-}" | xargs)"
+      destination="$(echo "${destination:-}" | xargs)"
+      [[ -n "$source" && -n "$destination" ]] || continue
+
+      case "$destination" in
+        */remnanode|*/remnanode/|/var/log/remnanode|/var/lib/marzban-node)
+          add_log_candidate "$source/access.log"
+          ;;
+      esac
+    done < <(
+      docker ps -q 2>/dev/null | while read -r cid; do
+        docker inspect -f '{{range .Mounts}}{{println .Source "|" .Destination}}{{end}}' "$cid" 2>/dev/null || true
+      done
+    )
+  fi
+
+  if [[ ${#LOG_FILES[@]} -eq 0 && "$AUTO_MODE" == "false" ]]; then
+    read -r -p "Log file path(s), comma-separated: " raw
+    IFS=',' read -r -a manual_logs <<< "$raw"
+    local p
+    for p in "${manual_logs[@]}"; do
+      p="$(echo "$p" | xargs)"
+      [[ -f "$p" ]] || die "Log file does not exist: $p"
+      add_log_candidate "$p"
+    done
+  fi
+
+  if [[ ${#LOG_FILES[@]} -eq 0 ]]; then
+    die "No Xray/Remnawave access.log found. Enable Xray access logging and mount it to the host, then run installer again. You can also specify --logs /path/a.log,/path/b.log"
+  fi
+
+  ok "Detected ${#LOG_FILES[@]} log file(s):"
+  local f
+  for f in "${LOG_FILES[@]}"; do
+    echo "  - $f"
+  done
+}
+
+version_ge_124() {
+  local version
+  version="$(go env GOVERSION 2>/dev/null | sed 's/^go//' || true)"
+  [[ "$version" =~ ^([0-9]+)\.([0-9]+) ]] || return 1
+  (( BASH_REMATCH[1] > 1 || (BASH_REMATCH[1] == 1 && BASH_REMATCH[2] >= 24) ))
+}
+
+ensure_go() {
+  if command -v go >/dev/null 2>&1 && version_ge_124; then
+    return
+  fi
+
+  local goversion="1.24.0"
+  info "Installing Go $goversion for source build..."
+  local tmp="/tmp/go-${goversion}.tar.gz"
+  curl -fL --retry 3 \
+    "https://go.dev/dl/go${goversion}.linux-${GO_ARCH}.tar.gz" \
+    -o "$tmp"
+  rm -rf /usr/local/go
+  tar -C /usr/local -xzf "$tmp"
+  rm -f "$tmp"
+  export PATH="/usr/local/go/bin:$PATH"
+  ln -sf /usr/local/go/bin/go /usr/local/bin/go
+  ok "Go $(go version | awk '{print $3}') installed"
+}
+
+install_from_release() {
+  local latest json asset_url
+  json="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null || true)"
+  latest="$(printf '%s' "$json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("tag_name",""))' 2>/dev/null || true)"
+  [[ -n "$latest" ]] || return 1
+
+  asset_url="https://github.com/$REPO/releases/download/$latest/tblockernew-${latest}-linux-${ARCH}.tar.gz"
+  info "Trying release $latest..."
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  if ! curl -fL --retry 3 "$asset_url" -o "$tmpdir/tblocker.tar.gz"; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
+
+  tar -xzf "$tmpdir/tblocker.tar.gz" -C "$tmpdir"
+  local bin
+  bin="$(find "$tmpdir" -maxdepth 2 -type f -name tblocker -print -quit)"
+  [[ -n "$bin" ]] || { rm -rf "$tmpdir"; return 1; }
+
+  mkdir -p "$INSTALL_DIR"
+  install -m 0755 "$bin" "$INSTALL_DIR/tblocker"
+
+  local default_cfg
+  default_cfg="$(find "$tmpdir" -maxdepth 2 -type f -name config.yaml.default -print -quit)"
+  [[ -n "$default_cfg" ]] && install -m 0644 "$default_cfg" "$INSTALL_DIR/config.yaml.default"
+
+  rm -rf "$tmpdir"
+  ok "Installed tblocker release $latest"
+}
+
+install_from_source() {
+  ensure_go
+  info "Building tblocker from $REPO ref $REF..."
+
+  local tmpdir archive srcdir
+  tmpdir="$(mktemp -d)"
+  archive="$tmpdir/source.tar.gz"
+
+  if ! curl -fL --retry 3 "https://github.com/$REPO/archive/refs/heads/$REF.tar.gz" -o "$archive"; then
+    curl -fL --retry 3 "https://github.com/$REPO/archive/refs/tags/$REF.tar.gz" -o "$archive"
+  fi
+
+  tar -xzf "$archive" -C "$tmpdir"
+  srcdir="$(find "$tmpdir" -mindepth 1 -maxdepth 1 -type d -name 'tblockernew-*' -print -quit)"
+  [[ -n "$srcdir" ]] || die "Unable to locate extracted source directory"
+
+  (
+    cd "$srcdir"
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.Version=source-$REF" -o "$tmpdir/tblocker" .
+  )
+
+  mkdir -p "$INSTALL_DIR"
+  install -m 0755 "$tmpdir/tblocker" "$INSTALL_DIR/tblocker"
+  install -m 0644 "$srcdir/config.yaml.default" "$INSTALL_DIR/config.yaml.default"
+  rm -rf "$tmpdir"
+
+  ok "Built and installed tblocker from source"
+}
+
+backup_existing() {
+  local stamp
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$INSTALL_DIR"
+
+  if [[ -f "$CONFIG_PATH" ]]; then
+    cp -a "$CONFIG_PATH" "$CONFIG_PATH.backup-$stamp"
+    info "Config backup: $CONFIG_PATH.backup-$stamp"
+  fi
+  if [[ -f "$INSTALL_DIR/tblocker" ]]; then
+    cp -a "$INSTALL_DIR/tblocker" "$INSTALL_DIR/tblocker.backup-$stamp"
+    info "Binary backup: $INSTALL_DIR/tblocker.backup-$stamp"
+  fi
+}
+
+write_config() {
+  if [[ ! -f "$CONFIG_PATH" ]]; then
+    if [[ -f "$INSTALL_DIR/config.yaml.default" ]]; then
+      cp "$INSTALL_DIR/config.yaml.default" "$CONFIG_PATH"
+    else
+      touch "$CONFIG_PATH"
+    fi
+  fi
+
+  python3 - "$CONFIG_PATH" "$FIREWALL" "${LOG_FILES[@]}" <<'PY'
 import sys
 from pathlib import Path
 
-config_path = Path(sys.argv[1])
-log_files = sys.argv[2:]
-text = config_path.read_text()
+path = Path(sys.argv[1])
+firewall = sys.argv[2]
+logs = sys.argv[3:]
 
+text = path.read_text() if path.exists() else ""
 lines = text.splitlines()
 out = []
-skip_logfiles = False
+skip_logs = False
+
 for line in lines:
     if line.startswith("LogFiles:"):
-        skip_logfiles = True
+        skip_logs = True
         continue
-    if skip_logfiles:
+    if skip_logs:
         if line.startswith("  - "):
             continue
-        skip_logfiles = False
-    if line.startswith("LogFile:"):
+        skip_logs = False
+    if line.startswith("LogFile:") or line.startswith("BlockMode:"):
         continue
     out.append(line)
 
-block = ["LogFiles:"] + [f'  - "{path}"' for path in log_files]
-config_path.write_text("\n".join(block + [""] + out) + "\n")
+header = ["LogFiles:"] + [f'  - "{p}"' for p in logs]
+header += ["", f'BlockMode: "{firewall}"', ""]
+
+path.write_text("\n".join(header + out).rstrip() + "\n")
 PY
-sed -i "s|BlockMode: \".*\"|BlockMode: \"$FIREWALL\"|" "$CONFIG_PATH"
 
-print_success "Configuration updated:"
-for log_file_path in "${clean_log_files[@]}"; do
-    print_info "  Log file: $log_file_path"
-done
-print_info "  Firewall: $FIREWALL"
+  ok "Configuration written: $CONFIG_PATH"
+}
 
-print_info "Starting tblocker service..."
-systemctl daemon-reload
-systemctl enable tblocker
-systemctl start tblocker
+write_service() {
+  cat > "$SERVICE_PATH" <<'EOF'
+[Unit]
+Description=XRay Torrent Blocker Service
+After=network-online.target docker.service
+Wants=network-online.target
 
-if systemctl is-active --quiet tblocker; then
-    print_success "tblocker service is running successfully!"
-else
-    print_error "Failed to start tblocker service"
-    systemctl status tblocker --no-pager
-    exit 1
-fi
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/tblocker/tblocker -c /opt/tblocker/config.yaml
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
 
-echo ""
-echo "==============================================================="
-print_success "Installation complete! The tblocker service is running."
-echo "==============================================================="
-echo ""
-print_info "Configuration file: $CONFIG_PATH"
-print_info "Service status: systemctl status tblocker"
-print_info "Service logs: journalctl -u tblocker -f"
-echo ""
-print_warning "IMPORTANT: Make sure your firewall ($FIREWALL) is properly configured!"
-echo ""
-print_info "For additional parameters (webhooks, whitelist, etc.) - see documentation:"
-print_info "https://github.com/SkyPip228/tblockernew"
-echo "==============================================================="
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable tblocker >/dev/null
+  ok "systemd service installed"
+}
+
+self_check() {
+  info "Running post-install checks..."
+
+  systemctl restart tblocker
+  sleep 2
+
+  if ! systemctl is-active --quiet tblocker; then
+    systemctl status tblocker --no-pager || true
+    journalctl -u tblocker -n 80 --no-pager || true
+    die "tblocker did not start"
+  fi
+
+  local missing=0 f
+  for f in "${LOG_FILES[@]}"; do
+    if [[ ! -r "$f" ]]; then
+      warn "Log is not readable: $f"
+      missing=1
+    fi
+  done
+  [[ $missing -eq 0 ]] || die "One or more configured logs are not readable"
+
+  command -v conntrack >/dev/null 2>&1 || die "conntrack is missing"
+  if [[ "$FIREWALL" == "nft" ]]; then
+    command -v nft >/dev/null 2>&1 || die "nft is missing"
+  else
+    command -v iptables >/dev/null 2>&1 || die "iptables is missing"
+  fi
+
+  ok "Service is active"
+  ok "Binary: $("$INSTALL_DIR/tblocker" -v 2>/dev/null || true)"
+  ok "Firewall: $FIREWALL"
+  ok "conntrack: available"
+
+  echo
+  echo "===== CONFIG ====="
+  cat "$CONFIG_PATH"
+  echo
+  echo "===== SERVICE ====="
+  systemctl --no-pager --full status tblocker | sed -n '1,14p'
+  echo
+  echo "===== LAST LOGS ====="
+  journalctl -u tblocker -n 20 --no-pager
+}
+
+main() {
+  echo "==============================================================="
+  echo " tblockernew automatic installer"
+  echo "==============================================================="
+
+  install_packages
+  choose_firewall
+  discover_logs
+  backup_existing
+
+  if ! install_from_release; then
+    warn "No compatible GitHub release found; using source build from ref: $REF"
+    install_from_source
+  fi
+
+  write_config
+  write_service
+  self_check
+
+  echo
+  ok "Installation completed successfully"
+  echo "Logs monitored:"
+  local f
+  for f in "${LOG_FILES[@]}"; do
+    echo "  - $f"
+  done
+  echo
+  echo "Useful commands:"
+  echo "  systemctl status tblocker --no-pager"
+  echo "  journalctl -u tblocker -f"
+  echo "  cat /opt/tblocker/config.yaml"
+}
+
+main "$@"
